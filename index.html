@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Gridwars</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- Description Page -->
+      <div class="description-page" id="descriptionPage">
+        <h1>Welcome to Gridwars!</h1>
+        <p>
+          Gridwars is a classic strategy game with two modes: play against an AI opponent or challenge a friend in a head-to-head battle! Take turns marking spaces in a 3x3 grid, aiming to be the first to align three of your symbols (X or O) in a row—horizontally, vertically, or diagonally. Think ahead, outsmart your opponent, and claim victory!
+        </p>
+        <p>
+          <strong>How to Play:</strong>
+          <ol>
+            <li>Choose your colors for Player X and Player O.</li>
+            <li>Click the "Start Game" button to begin.</li>
+            <li>Select a mode: Play against the AI or another player.</li>
+            <li>Player X goes first. Click on any cell to place your symbol.</li>
+            <li>Alternate turns until one player wins or the game ends in a draw.</li>
+          </ol>
+        </p>
+        <p>You can reach out to me at <a href="mailto:cosmoscoderr@gmail.com">cosmoscoderr@gmail.com</a> for feedback or questions.</p>
+        <button id="startBtn" class="pulsate">Start Game</button>
+      </div>
+
+      <!-- Game Page (Hidden Initially) -->
+      <div class="game-page" id="gamePage">
+        <h1>Gridwars</h1>
+        <div class="mode-selector">
+          <h2>Select Mode:</h2>
+          <select id="modeSelect">
+            <option value="twoPlayer">Two-Player Mode</option>
+            <option value="ai">AI Mode</option>
+          </select>
+          <h2>AI Difficulty:</h2>
+          <select id="difficultySelect">
+            <option value="beginner">Beginner (Easy)</option>
+            <option value="amateur">Amateur (Medium)</option>
+            <option value="pro">Pro (Hard)</option>
+          </select>
+        </div>
+        <div class="color-picker">
+          <h2>Choose Your Colors:</h2>
+          <label for="colorX">Player X Color:</label>
+          <input type="color" id="colorX" value="#ff4d4d" />
+          <label for="colorO">Player O Color:</label>
+          <input type="color" id="colorO" value="#4d94ff" />
+          <button id="applyColors">Apply Colors</button>
+        </div>
+        <div class="game-board" id="gameBoard">
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+          <div class="cell" data-cell></div>
+        </div>
+        <div class="controls">
+          <button id="restartBtn">Restart</button>
+          <button id="quitBtn">Quit</button>
+        </div>
+        <p id="status">Player X's turn</p>
+        <p class="footer">Designed by Nana Kofi Fosu</p>
+      </div>
+    </div>
+    <script src="script.js"></script>
+  </body>
+</html>
