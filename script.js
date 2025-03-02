@@ -1,6 +1,7 @@
 const cells = document.querySelectorAll("[data-cell]");
 const statusDisplay = document.getElementById("status");
 const restartBtn = document.getElementById("restartBtn");
+const clearBtn = document.getElementById("clearBtn");
 const pauseBtn = document.getElementById("pauseBtn");
 const quitBtn = document.getElementById("quitBtn");
 const colorXInput = document.getElementById("colorX");
@@ -36,14 +37,11 @@ let isAIMode = false;
 let isOnlineMode = false;
 let aiDifficulty = "beginner";
 let playerSymbol = null;
-let currentPinCode = null;
-
-// Connect to the hosted server
-const socket = io("https://xowars.space", {
-  reconnection: true,
-  reconnectionAttempts: 5,
-  reconnectionDelay: 1000,
-});
+let peer = null;
+let conn = null;
+let board = Array(9).fill(null);
+let moveQueue = [];
+let lastSyncTime = 0;
 
 const winningCombinations = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -94,18 +92,43 @@ function toggleMultiplayerControls() {
   multiplayerSection.style.display = isOnlineMode ? "block" : "none";
   chatSidebar.style.display = isOnlineMode ? "block" : "none";
   chatContent.classList.remove("active");
+  toggleChatBtn.textContent = "Open Comm";
   generatedCodeDisplay.textContent = "";
   multiplayerStatus.textContent = "";
-  currentPinCode = null;
   playerSymbol = null;
+  if (peer) peer.destroy();
+  conn = null;
+  clearGrid();
 }
 
 // Generate Game Code
 generatePinBtn.addEventListener("click", () => {
-  currentPinCode = generatePinCode();
-  generatedCodeDisplay.textContent = `Code: ${currentPinCode}`;
-  socket.emit("createGame", { pinCode: currentPinCode, playerId: socket.id });
-  multiplayerStatus.textContent = "Awaiting Challenger...";
+  if (peer) peer.destroy();
+  peer = new Peer(generatePinCode(), {
+    debug: 2,
+    config: { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "turn:relay1.expressturn.com:3478", username: "user", credential: "pass" }] }
+  });
+  peer.on('open', (id) => {
+    generatedCodeDisplay.textContent = `Your Code: ${id}`;
+    multiplayerStatus.textContent = "Share this code or enter another to connect!";
+    playerSymbol = null;
+    gameActive = true;
+  });
+  peer.on('connection', (connection) => {
+    conn = connection;
+    playerSymbol = "X";
+    isXNext = true;
+    statusDisplay.textContent = "X Activates... (You: X)";
+    setupConnection();
+    multiplayerStatus.textContent = "Grid Linked! Engage!";
+    chatContent.classList.add("active");
+    toggleChatBtn.textContent = "Close Comm";
+    syncBoard();
+  });
+  peer.on('error', (err) => {
+    multiplayerStatus.textContent = `Error: ${err.type}. Retry generating code.`;
+    console.error("PeerJS Error:", err);
+  });
   clickSound.play();
 });
 
@@ -120,44 +143,110 @@ function generatePinCode() {
 
 // Join Game
 joinBtn.addEventListener("click", () => {
-  const opponentPinCode = pinInput.value.trim().toUpperCase();
-  if (!opponentPinCode) {
+  const opponentCode = pinInput.value.trim().toUpperCase();
+  if (!opponentCode) {
     statusDisplay.textContent = "Input a Code!";
     return;
   }
-  socket.emit("joinGame", { pinCode: opponentPinCode, playerId: socket.id });
+  if (!peer) {
+    multiplayerStatus.textContent = "Generate your code first!";
+    return;
+  }
+  conn = peer.connect(opponentCode, { reliable: true });
+  playerSymbol = "O";
+  isXNext = true;
+  statusDisplay.textContent = "X Activates... (You: O)";
+  gameActive = true;
+  setupConnection();
   multiplayerStatus.textContent = "Linking...";
   clickSound.play();
 });
+
+// Setup PeerJS Connection
+function setupConnection() {
+  conn.on('open', () => {
+    multiplayerStatus.textContent = "Grid Linked! Engage!";
+    chatContent.classList.add("active");
+    toggleChatBtn.textContent = "Close Comm";
+    syncBoard();
+    processMoveQueue();
+  });
+  conn.on('data', (data) => {
+    if (!gameActive) return;
+    if (data.type === "move") {
+      board = data.board;
+      updateBoard();
+      isXNext = !isXNext;
+      statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates...`;
+      clickSound.play();
+      checkGameEnd();
+    } else if (data.type === "chat") {
+      displayChatMessage(data.message);
+    } else if (data.type === "sync" || data.type === "clear") {
+      board = data.board;
+      updateBoard();
+      isXNext = true;
+      statusDisplay.textContent = "X Activates...";
+    } else if (data.type === "gameOver") {
+      showWin(data.message);
+      gameActive = false;
+      winSound.play();
+    }
+  });
+  conn.on('close', () => {
+    statusDisplay.textContent = "Challenger Lost. Reset to Retry.";
+    gameActive = false;
+    multiplayerStatus.textContent = "Disconnected. Generate or join again.";
+    chatContent.classList.remove("active");
+    toggleChatBtn.textContent = "Open Comm";
+  });
+  conn.on('error', (err) => {
+    console.error("Connection Error:", err);
+    multiplayerStatus.textContent = "Link Issue. Try again.";
+  });
+}
 
 // Draw Symbol
 function drawSymbol(event) {
   if (!gameActive || isPaused) return;
   const cell = event.target;
   const index = [...cells].indexOf(cell);
-  if (cell.classList.contains("X") || cell.classList.contains("O")) return;
+  if (board[index]) return;
 
   if (isOnlineMode) {
-    if (playerSymbol !== (isXNext ? "X" : "O")) return;
-    socket.emit("makeMove", { pinCode: currentPinCode, index, player: playerSymbol });
-  } else {
-    const currentClass = isXNext ? "X" : "O";
-    cell.classList.add(currentClass);
-    cell.style.color = isXNext ? colorX : colorO;
-    cell.textContent = currentClass;
+    if (!playerSymbol || playerSymbol !== (isXNext ? "X" : "O")) return; // Online turn enforcement
+    board[index] = playerSymbol;
+    updateBoard();
     clickSound.play();
 
-    if (checkWin(currentClass)) {
-      showWin(`${currentClass} Dominates!`);
+    if (conn && conn.open) {
+      conn.send({ type: "move", board });
+      processMoveQueue();
+    } else {
+      moveQueue.push({ type: "move", board: [...board] });
+      multiplayerStatus.textContent = "Buffering Move...";
+    }
+
+    checkGameEnd();
+    isXNext = !isXNext;
+    statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates...`;
+  } else {
+    // Local and AI modes
+    const currentSymbol = isXNext ? "X" : "O";
+    board[index] = currentSymbol;
+    updateBoard();
+    clickSound.play();
+
+    if (checkWin(currentSymbol)) {
+      showWin(`${currentSymbol} Dominates!`);
       gameActive = false;
       winSound.play();
       return;
     }
-
-    if ([...cells].every(cell => cell.classList.contains("X") || cell.classList.contains("O"))) {
+    if (board.every(cell => cell)) {
       showWin("Gridlock!");
       gameActive = false;
-      setTimeout(restartGame, 2000);
+      setTimeout(clearGrid, 2000);
       return;
     }
 
@@ -167,10 +256,19 @@ function drawSymbol(event) {
   }
 }
 
+// Process Queued Moves
+function processMoveQueue() {
+  while (moveQueue.length > 0 && conn && conn.open) {
+    const move = moveQueue.shift();
+    conn.send(move);
+    multiplayerStatus.textContent = "Grid Linked! Engage!";
+  }
+}
+
 // AI Move
 function makeAIMove() {
   if (!gameActive || isPaused) return;
-  const emptyCells = [...cells].filter(cell => !cell.classList.contains("X") && !cell.classList.contains("O"));
+  const emptyCells = [...cells].filter((_, i) => !board[i]);
   if (emptyCells.length > 0) {
     let chosenCell;
     if (aiDifficulty === "beginner") {
@@ -189,9 +287,10 @@ function getBestMove(emptyCells, player, isPro = false) {
   if (isPro) {
     let bestMove, bestScore = -Infinity;
     emptyCells.forEach(cell => {
-      cell.classList.add(player);
-      const score = minimax(cells, 0, false);
-      cell.classList.remove(player);
+      const index = [...cells].indexOf(cell);
+      board[index] = player;
+      const score = minimax(board, 0, false);
+      board[index] = null;
       if (score > bestScore) {
         bestScore = score;
         bestMove = cell;
@@ -201,47 +300,37 @@ function getBestMove(emptyCells, player, isPro = false) {
   } else {
     for (let combination of winningCombinations) {
       const [a, b, c] = combination;
-      if (
-        cells[a].classList.contains("O") &&
-        cells[b].classList.contains("O") &&
-        !cells[c].classList.contains("X") &&
-        emptyCells.includes(cells[c])
-      ) return cells[c];
-      if (
-        cells[a].classList.contains("X") &&
-        cells[b].classList.contains("X") &&
-        !cells[c].classList.contains("O") &&
-        emptyCells.includes(cells[c])
-      ) return cells[c];
+      if (board[a] === "O" && board[b] === "O" && !board[c] && emptyCells.includes(cells[c])) return cells[c];
+      if (board[a] === "X" && board[b] === "X" && !board[c] && emptyCells.includes(cells[c])) return cells[c];
     }
     return emptyCells[Math.floor(Math.random() * emptyCells.length)];
   }
 }
 
 // Minimax Algorithm
-function minimax(cells, depth, isMaximizing) {
+function minimax(board, depth, isMaximizing) {
   if (checkWin("O")) return 10 - depth;
   if (checkWin("X")) return depth - 10;
-  if ([...cells].every(cell => cell.classList.contains("X") || cell.classList.contains("O"))) return 0;
+  if (board.every(cell => cell)) return 0;
 
   if (isMaximizing) {
     let bestScore = -Infinity;
-    cells.forEach(cell => {
-      if (!cell.classList.contains("X") && !cell.classList.contains("O")) {
-        cell.classList.add("O");
-        const score = minimax(cells, depth + 1, false);
-        cell.classList.remove("O");
+    board.forEach((cell, i) => {
+      if (!cell) {
+        board[i] = "O";
+        const score = minimax(board, depth + 1, false);
+        board[i] = null;
         bestScore = Math.max(score, bestScore);
       }
     });
     return bestScore;
   } else {
     let bestScore = Infinity;
-    cells.forEach(cell => {
-      if (!cell.classList.contains("X") && !cell.classList.contains("O")) {
-        cell.classList.add("X");
-        const score = minimax(cells, depth + 1, true);
-        cell.classList.remove("X");
+    board.forEach((cell, i) => {
+      if (!cell) {
+        board[i] = "X";
+        const score = minimax(board, depth + 1, true);
+        board[i] = null;
         bestScore = Math.min(score, bestScore);
       }
     });
@@ -250,10 +339,26 @@ function minimax(cells, depth, isMaximizing) {
 }
 
 // Check Win
-function checkWin(currentClass) {
+function checkWin(symbol) {
   return winningCombinations.some(combination =>
-    combination.every(index => cells[index].classList.contains(currentClass))
+    combination.every(index => board[index] === symbol)
   );
+}
+
+// Check Game End
+function checkGameEnd() {
+  const currentSymbol = isOnlineMode ? playerSymbol : (isXNext ? "O" : "X"); // Last mover
+  if (checkWin(currentSymbol)) {
+    if (isOnlineMode && conn && conn.open) conn.send({ type: "gameOver", message: `${currentSymbol} Dominates!` });
+    showWin(`${currentSymbol} Dominates!`);
+    gameActive = false;
+    winSound.play();
+  } else if (board.every(cell => cell)) {
+    if (isOnlineMode && conn && conn.open) conn.send({ type: "gameOver", message: "Gridlock!" });
+    showWin("Gridlock!");
+    gameActive = false;
+    setTimeout(clearGrid, 2000);
+  }
 }
 
 // Show Win/Draw Overlay
@@ -266,10 +371,25 @@ function showWin(message) {
   overlay.appendChild(text);
   document.body.appendChild(overlay);
   overlay.classList.add("active");
-  setTimeout(() => {
-    overlay.remove();
-  }, 2000);
+  setTimeout(() => overlay.remove(), 2000);
 }
+
+// Clear Grid
+function clearGrid() {
+  isXNext = true;
+  gameActive = true;
+  isPaused = false;
+  pauseBtn.textContent = "Pause";
+  statusDisplay.textContent = "X Activates...";
+  board = Array(9).fill(null);
+  updateBoard();
+  if (isOnlineMode && conn && conn.open) {
+    conn.send({ type: "clear", board });
+  }
+  clickSound.play();
+}
+
+clearBtn.addEventListener("click", clearGrid);
 
 // Restart Game
 function restartGame() {
@@ -278,23 +398,43 @@ function restartGame() {
   isPaused = false;
   pauseBtn.textContent = "Pause";
   statusDisplay.textContent = "X Activates...";
-  cells.forEach(cell => {
-    cell.classList.remove("X", "O");
-    cell.textContent = "";
-    cell.style.color = "";
-  });
-  if (isOnlineMode && currentPinCode) {
+  board = Array(9).fill(null);
+  updateBoard();
+  moveQueue = [];
+  if (isOnlineMode && peer) {
     chatMessages.innerHTML = "";
     chatContent.classList.remove("active");
-    generatedCodeDisplay.textContent = `Code: ${currentPinCode}`;
+    toggleChatBtn.textContent = "Open Comm";
+    multiplayerStatus.textContent = "Resetting...";
+    generatedCodeDisplay.textContent = `Your Code: ${peer.id}`;
     pinInput.value = "";
-    socket.emit("createGame", { pinCode: currentPinCode, playerId: socket.id });
-    multiplayerStatus.textContent = "Awaiting Challenger...";
+    multiplayerStatus.textContent = "Share this code or enter another to connect!";
+    if (conn && conn.open) conn.send({ type: "sync", board });
   } else {
     multiplayerStatus.textContent = "";
     generatedCodeDisplay.textContent = "";
   }
   clickSound.play();
+}
+
+// Sync Board
+function syncBoard() {
+  if (conn && conn.open && Date.now() - lastSyncTime > 500) {
+    conn.send({ type: "sync", board });
+    lastSyncTime = Date.now();
+  }
+}
+
+// Update Board
+function updateBoard() {
+  cells.forEach((cell, index) => {
+    cell.textContent = board[index] || "";
+    cell.classList.remove("X", "O");
+    if (board[index]) {
+      cell.classList.add(board[index]);
+      cell.style.color = board[index] === "X" ? colorX : colorO;
+    }
+  });
 }
 
 // Pause Game
@@ -308,17 +448,17 @@ pauseBtn.addEventListener("click", () => {
 
 // Quit Game
 quitBtn.addEventListener("click", () => {
-  if (confirm("Exit the Grid?")) window.close();
+  if (confirm("Exit the Grid?")) {
+    if (peer) peer.destroy();
+    window.close();
+  }
 });
 
 // Apply Colors
 applyColorsBtn.addEventListener("click", () => {
   colorX = colorXInput.value;
   colorO = colorOInput.value;
-  cells.forEach(cell => {
-    if (cell.classList.contains("X")) cell.style.color = colorX;
-    else if (cell.classList.contains("O")) cell.style.color = colorO;
-  });
+  updateBoard();
   clickSound.play();
 });
 
@@ -329,89 +469,31 @@ toggleChatBtn.addEventListener("click", () => {
   clickSound.play();
 });
 
-// Socket.IO Events
-socket.on("connect", () => {
-  console.log("Connected to server:", socket.id);
-  multiplayerStatus.textContent = "Connected to Grid!";
-});
-
-socket.on("connect_error", err => {
-  statusDisplay.textContent = "Core Link Failed. Retry.";
-  multiplayerStatus.textContent = "";
-  console.error("Connection error:", err.message);
-});
-
-socket.on("gameCreated", () => {
-  multiplayerStatus.textContent = "Awaiting Challenger...";
-});
-
-socket.on("gameJoined", ({ pinCode, symbol }) => {
-  currentPinCode = pinCode;
-  playerSymbol = symbol;
-  gameActive = true;
-  isXNext = symbol === "X";
-  statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates... (You: ${symbol})`;
-  multiplayerStatus.textContent = "Grid Linked! Engage!";
-  chatContent.classList.add("active");
-  toggleChatBtn.textContent = "Close Comm";
-});
-
-socket.on("updateBoard", board => {
-  updateBoard(board);
-  isXNext = !isXNext;
-  statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates...`;
-  clickSound.play();
-});
-
-socket.on("gameOver", message => {
-  showWin(message);
-  gameActive = false;
-  winSound.play();
-});
-
-socket.on("opponentDisconnected", () => {
-  statusDisplay.textContent = "Challenger Lost. Reset to Retry.";
-  gameActive = false;
-  multiplayerStatus.textContent = "";
-  chatContent.classList.remove("active");
-  toggleChatBtn.textContent = "Open Comm";
-});
-
-socket.on("error", message => {
-  statusDisplay.textContent = message;
-  multiplayerStatus.textContent = "";
-  console.log("Server Error:", message);
-});
-
-function updateBoard(board) {
-  cells.forEach((cell, index) => {
-    cell.textContent = board[index] || "";
-    cell.classList.remove("X", "O");
-    if (board[index]) {
-      cell.classList.add(board[index]);
-      cell.style.color = board[index] === "X" ? colorX : colorO;
-    }
-  });
-}
-
 // Chat
-sendChatBtn.addEventListener("click", () => {
-  const message = chatInput.value;
-  if (message && isOnlineMode) {
-    socket.emit("chatMessage", { pinCode: currentPinCode, message: `${playerSymbol}: ${message}` });
+sendChatBtn.addEventListener("click", sendChatMessage);
+chatInput.addEventListener("keypress", (e) => {
+  if (e.key === "Enter") sendChatMessage();
+});
+
+function sendChatMessage() {
+  const message = chatInput.value.trim();
+  if (message && isOnlineMode && conn && conn.open) {
+    const fullMessage = `${playerSymbol}: ${message}`;
+    conn.send({ type: "chat", message: fullMessage });
+    displayChatMessage(fullMessage);
     chatInput.value = "";
     clickSound.play();
   }
-});
+}
 
-socket.on("chat", message => {
+function displayChatMessage(message) {
   const msgDiv = document.createElement("div");
   msgDiv.textContent = message;
   chatMessages.appendChild(msgDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
-});
+}
 
-// Touch and Click Events for Cells
+// Cell Events
 cells.forEach(cell => {
   cell.addEventListener("click", drawSymbol);
   cell.addEventListener("touchstart", (e) => {
@@ -419,4 +501,5 @@ cells.forEach(cell => {
     drawSymbol(e);
   }, { passive: false });
 });
+
 restartBtn.addEventListener("click", restartGame);
