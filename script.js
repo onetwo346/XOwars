@@ -1,505 +1,757 @@
-const cells = document.querySelectorAll("[data-cell]");
-const statusDisplay = document.getElementById("status");
-const restartBtn = document.getElementById("restartBtn");
-const clearBtn = document.getElementById("clearBtn");
-const pauseBtn = document.getElementById("pauseBtn");
-const quitBtn = document.getElementById("quitBtn");
-const colorXInput = document.getElementById("colorX");
-const colorOInput = document.getElementById("colorO");
-const applyColorsBtn = document.getElementById("applyColors");
-const startBtn = document.getElementById("startBtn");
-const descriptionPage = document.getElementById("descriptionPage");
-const gamePage = document.getElementById("gamePage");
-const modeToggle = document.getElementById("modeToggle");
-const modeOptions = document.getElementById("modeOptions");
-const difficultyOptions = document.getElementById("difficultyOptions");
-const multiplayerSection = document.getElementById("multiplayerSection");
-const generatePinBtn = document.getElementById("generatePinBtn");
-const generatedCodeDisplay = document.getElementById("generatedCode");
-const pinInput = document.getElementById("pinInput");
-const joinBtn = document.getElementById("joinBtn");
-const multiplayerStatus = document.getElementById("multiplayerStatus");
-const chatSidebar = document.getElementById("chatSidebar");
-const toggleChatBtn = document.getElementById("toggleChatBtn");
-const chatContent = document.getElementById("chatContent");
-const chatMessages = document.getElementById("chatMessages");
-const chatInput = document.getElementById("chatInput");
-const sendChatBtn = document.getElementById("sendChat");
-const clickSound = document.getElementById("clickSound");
-const winSound = document.getElementById("winSound");
+// Simple XOwars Game - Clean and Easy to Understand
+class SimpleXOwars {
+    constructor() {
+        this.board = Array(9).fill('');
+        this.currentPlayer = 'X';
+        this.gameMode = 'local';
+        this.difficulty = 'medium';
+        this.gameActive = true;
+        this.gameStartTime = Date.now();
+        this.moveCount = 0;
+        this.moveHistory = [];
+        
+        // Statistics
+        this.stats = this.loadStats();
+        
+        // Multiplayer
+        this.peer = null;
+        this.connection = null;
+        this.isHost = false;
+        this.roomCode = '';
+        this.mySymbol = 'X'; // Track which symbol this player is using
+        this.isMyTurn = true; // Track if it's this player's turn
+        
+        this.initializeGame();
+    }
 
-let isXNext = true;
-let gameActive = true;
-let isPaused = false;
-let colorX = colorXInput.value;
-let colorO = colorOInput.value;
-let isAIMode = false;
-let isOnlineMode = false;
-let aiDifficulty = "beginner";
-let playerSymbol = null;
-let peer = null;
-let conn = null;
-let board = Array(9).fill(null);
-let moveQueue = [];
-let lastSyncTime = 0;
+    initializeGame() {
+        this.updateParticles();
+        this.bindEvents();
+        this.updateStatsDisplay();
+        this.startGameTimer();
+    }
 
-const winningCombinations = [
-  [0, 1, 2], [3, 4, 5], [6, 7, 8],
-  [0, 3, 6], [1, 4, 7], [2, 5, 8],
-  [0, 4, 8], [2, 4, 6]
-];
+    // ==================== UI Functions ====================
+    
+    updateParticles() {
+        const particlesContainer = document.getElementById('particles');
+        particlesContainer.innerHTML = '';
+        
+        for (let i = 0; i < 50; i++) {
+            const particle = document.createElement('div');
+            particle.className = 'particle';
+            particle.style.left = Math.random() * 100 + '%';
+            particle.style.animationDelay = Math.random() * 6 + 's';
+            particle.style.animationDuration = (6 + Math.random() * 3) + 's';
+            particlesContainer.appendChild(particle);
+        }
+    }
 
-// Start Game
-startBtn.addEventListener("click", () => {
-  descriptionPage.style.display = "none";
-  gamePage.style.display = "block";
-  toggleMultiplayerControls();
-  clickSound.play();
-});
+    bindEvents() {
+        // Game board clicks
+        document.querySelectorAll('.cell').forEach((cell, index) => {
+            cell.addEventListener('click', () => this.makeMove(index));
+        });
 
-// Radial Mode Selector
-modeToggle.addEventListener("click", () => {
-  modeOptions.classList.toggle("active");
-  if (!isAIMode) difficultyOptions.classList.remove("active");
-  clickSound.play();
-});
-
-modeOptions.querySelectorAll(".radial-option").forEach(option => {
-  option.addEventListener("click", (e) => {
+        // Mode selection
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
     const mode = e.target.dataset.mode;
-    isAIMode = mode === "ai";
-    isOnlineMode = mode === "online";
-    toggleMultiplayerControls();
-    if (isAIMode) difficultyOptions.classList.add("active");
-    else difficultyOptions.classList.remove("active");
-    modeOptions.classList.remove("active");
-    restartGame();
-    clickSound.play();
+                const difficulty = e.target.dataset.difficulty;
+                
+                if (mode) {
+                    this.selectMode(mode);
+                } else if (difficulty) {
+                    this.selectDifficulty(difficulty);
+                }
   });
 });
 
-difficultyOptions.querySelectorAll(".radial-option").forEach(option => {
-  option.addEventListener("click", (e) => {
-    aiDifficulty = e.target.dataset.difficulty;
-    difficultyOptions.classList.remove("active");
-    if (isAIMode) restartGame();
-    clickSound.play();
-  });
-});
+        // Color changes
+        document.getElementById('xColor').addEventListener('change', this.updateColors.bind(this));
+        document.getElementById('oColor').addEventListener('change', this.updateColors.bind(this));
 
-// Toggle Multiplayer Controls
-function toggleMultiplayerControls() {
-  multiplayerSection.style.display = isOnlineMode ? "block" : "none";
-  chatSidebar.style.display = isOnlineMode ? "block" : "none";
-  chatContent.classList.remove("active");
-  toggleChatBtn.textContent = "Open Comm";
-  generatedCodeDisplay.textContent = "";
-  multiplayerStatus.textContent = "";
-  playerSymbol = null;
-  if (peer) peer.destroy();
-  conn = null;
-  clearGrid();
-}
-
-// Generate Game Code
-generatePinBtn.addEventListener("click", () => {
-  if (peer) peer.destroy();
-  peer = new Peer(generatePinCode(), {
-    debug: 2,
-    config: { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "turn:relay1.expressturn.com:3478", username: "user", credential: "pass" }] }
-  });
-  peer.on('open', (id) => {
-    generatedCodeDisplay.textContent = `Your Code: ${id}`;
-    multiplayerStatus.textContent = "Share this code or enter another to connect!";
-    playerSymbol = null;
-    gameActive = true;
-  });
-  peer.on('connection', (connection) => {
-    conn = connection;
-    playerSymbol = "X";
-    isXNext = true;
-    statusDisplay.textContent = "X Activates... (You: X)";
-    setupConnection();
-    multiplayerStatus.textContent = "Grid Linked! Engage!";
-    chatContent.classList.add("active");
-    toggleChatBtn.textContent = "Close Comm";
-    syncBoard();
-  });
-  peer.on('error', (err) => {
-    multiplayerStatus.textContent = `Error: ${err.type}. Retry generating code.`;
-    console.error("PeerJS Error:", err);
-  });
-  clickSound.play();
-});
-
-function generatePinCode() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let pin = "";
-  for (let i = 0; i < 6; i++) {
-    pin += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return pin;
-}
-
-// Join Game
-joinBtn.addEventListener("click", () => {
-  const opponentCode = pinInput.value.trim().toUpperCase();
-  if (!opponentCode) {
-    statusDisplay.textContent = "Input a Code!";
-    return;
-  }
-  if (!peer) {
-    multiplayerStatus.textContent = "Generate your code first!";
-    return;
-  }
-  conn = peer.connect(opponentCode, { reliable: true });
-  playerSymbol = "O";
-  isXNext = true;
-  statusDisplay.textContent = "X Activates... (You: O)";
-  gameActive = true;
-  setupConnection();
-  multiplayerStatus.textContent = "Linking...";
-  clickSound.play();
-});
-
-// Setup PeerJS Connection
-function setupConnection() {
-  conn.on('open', () => {
-    multiplayerStatus.textContent = "Grid Linked! Engage!";
-    chatContent.classList.add("active");
-    toggleChatBtn.textContent = "Close Comm";
-    syncBoard();
-    processMoveQueue();
-  });
-  conn.on('data', (data) => {
-    if (!gameActive) return;
-    if (data.type === "move") {
-      board = data.board;
-      updateBoard();
-      isXNext = !isXNext;
-      statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates...`;
-      clickSound.play();
-      checkGameEnd();
-    } else if (data.type === "chat") {
-      displayChatMessage(data.message);
-    } else if (data.type === "sync" || data.type === "clear") {
-      board = data.board;
-      updateBoard();
-      isXNext = true;
-      statusDisplay.textContent = "X Activates...";
-    } else if (data.type === "gameOver") {
-      showWin(data.message);
-      gameActive = false;
-      winSound.play();
+        // Chat enter key
+        document.getElementById('chatInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.sendChatMessage();
+            }
+        });
     }
-  });
-  conn.on('close', () => {
-    statusDisplay.textContent = "Challenger Lost. Reset to Retry.";
-    gameActive = false;
-    multiplayerStatus.textContent = "Disconnected. Generate or join again.";
-    chatContent.classList.remove("active");
-    toggleChatBtn.textContent = "Open Comm";
-  });
-  conn.on('error', (err) => {
-    console.error("Connection Error:", err);
-    multiplayerStatus.textContent = "Link Issue. Try again.";
+
+    selectMode(mode) {
+        this.gameMode = mode;
+        this.resetGame();
+        
+        // Update active button
+        document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
+        
+        // Show/hide relevant sections
+        const multiplayerSection = document.getElementById('multiplayerSection');
+        const chatSection = document.getElementById('chatSection');
+        const difficultySelection = document.getElementById('difficultySelection');
+        
+        if (mode === 'online') {
+            multiplayerSection.classList.add('show');
+            chatSection.classList.add('show');
+            difficultySelection.classList.remove('show');
+        } else if (mode === 'ai') {
+            multiplayerSection.classList.remove('show');
+            chatSection.classList.remove('show');
+            difficultySelection.classList.add('show');
+        } else {
+            multiplayerSection.classList.remove('show');
+            chatSection.classList.remove('show');
+            difficultySelection.classList.remove('show');
+        }
+    }
+
+    selectDifficulty(difficulty) {
+        this.difficulty = difficulty;
+        
+        // Update active button
+        document.querySelectorAll('.mode-btn[data-difficulty]').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.querySelector(`[data-difficulty="${difficulty}"]`).classList.add('active');
+    }
+
+    updateColors() {
+        const xColor = document.getElementById('xColor').value;
+        const oColor = document.getElementById('oColor').value;
+        
+        document.documentElement.style.setProperty('--primary-neon', xColor);
+        document.documentElement.style.setProperty('--secondary-neon', oColor);
+    }
+
+    // ==================== Game Logic ====================
+    
+    makeMove(index) {
+        if (!this.gameActive || this.board[index] !== '') return;
+        
+        // In online mode, check if it's player's turn
+        if (this.gameMode === 'online' && this.connection && !this.isMyTurn) {
+            console.log('Not your turn!');
+            return;
+        }
+        
+        // In online mode, ensure player uses their assigned symbol
+        if (this.gameMode === 'online' && this.connection && this.currentPlayer !== this.mySymbol) {
+            console.log('Wrong symbol!');
+            return;
+        }
+
+        this.board[index] = this.currentPlayer;
+        this.moveCount++;
+        this.moveHistory.push({ index, player: this.currentPlayer });
+        
+        this.updateCell(index, this.currentPlayer);
+        
+        if (this.checkWin()) {
+            this.endGame(this.currentPlayer);
+            return;
+        }
+        
+        if (this.moveCount === 9) {
+            this.endGame('draw');
+            return;
+        }
+        
+        this.switchPlayer();
+        
+        // Update turn status for online mode
+        if (this.gameMode === 'online' && this.connection) {
+            this.isMyTurn = false;
+            this.connection.send({
+                type: 'move',
+                index: index,
+                player: this.board[index],
+                moveCount: this.moveCount,
+                gameActive: this.gameActive
+            });
+        }
+        
+        // AI move
+        if (this.gameMode === 'ai' && this.currentPlayer === 'O' && this.gameActive) {
+            setTimeout(() => this.makeAIMove(), 500);
+        }
+    }
+
+    updateCell(index, player) {
+        const cell = document.querySelector(`[data-index="${index}"]`);
+        cell.textContent = player;
+        cell.classList.add(player);
+    }
+
+    switchPlayer() {
+        this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
+        document.getElementById('currentTurn').textContent = this.currentPlayer;
+    }
+
+    checkWin() {
+        const winPatterns = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+            [0, 4, 8], [2, 4, 6]             // Diagonals
+        ];
+        
+        return winPatterns.some(pattern => {
+            const [a, b, c] = pattern;
+            return this.board[a] && 
+                   this.board[a] === this.board[b] && 
+                   this.board[a] === this.board[c];
   });
 }
 
-// Draw Symbol
-function drawSymbol(event) {
-  if (!gameActive || isPaused) return;
-  const cell = event.target;
-  const index = [...cells].indexOf(cell);
-  if (board[index]) return;
-
-  if (isOnlineMode) {
-    if (!playerSymbol || playerSymbol !== (isXNext ? "X" : "O")) return; // Online turn enforcement
-    board[index] = playerSymbol;
-    updateBoard();
-    clickSound.play();
-
-    if (conn && conn.open) {
-      conn.send({ type: "move", board });
-      processMoveQueue();
+    endGame(winner) {
+        this.gameActive = false;
+        
+        if (winner === 'draw') {
+            this.stats.draws++;
+            this.showWinOverlay('🤝 Draw! 🤝', 'Draw');
+        } else {
+            if (winner === 'X') {
+                this.stats.wins++;
     } else {
-      moveQueue.push({ type: "move", board: [...board] });
-      multiplayerStatus.textContent = "Buffering Move...";
+                this.stats.losses++;
+            }
+            this.showWinOverlay(`🎉 ${winner} Wins! 🎉`, winner);
+        }
+        
+        this.saveStats();
+        this.updateStatsDisplay();
     }
 
-    checkGameEnd();
-    isXNext = !isXNext;
-    statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates...`;
-  } else {
-    // Local and AI modes
-    const currentSymbol = isXNext ? "X" : "O";
-    board[index] = currentSymbol;
-    updateBoard();
-    clickSound.play();
-
-    if (checkWin(currentSymbol)) {
-      showWin(`${currentSymbol} Dominates!`);
-      gameActive = false;
-      winSound.play();
-      return;
-    }
-    if (board.every(cell => cell)) {
-      showWin("Gridlock!");
-      gameActive = false;
-      setTimeout(clearGrid, 2000);
-      return;
+    showWinOverlay(message, winner) {
+        const gameTime = Math.floor((Date.now() - this.gameStartTime) / 1000);
+        const minutes = Math.floor(gameTime / 60);
+        const seconds = gameTime % 60;
+        
+        document.getElementById('winText').textContent = message;
+        document.getElementById('winTime').textContent = 
+            `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        document.getElementById('winMoves').textContent = this.moveCount;
+        document.getElementById('winMode').textContent = 
+            this.gameMode.charAt(0).toUpperCase() + this.gameMode.slice(1);
+        
+        // Add dramatic effect
+        this.triggerWinEffect();
+        
+        document.getElementById('winOverlay').classList.add('active');
     }
 
-    isXNext = !isXNext;
-    statusDisplay.textContent = `${isXNext ? "X" : "O"} Activates...`;
-    if (isAIMode && !isXNext) setTimeout(makeAIMove, 500);
+    triggerWinEffect() {
+        // Screen flash effect
+        document.body.style.animation = 'winFlash 0.5s ease-out';
+        
+        // Make game board cells glow
+        document.querySelectorAll('.cell').forEach(cell => {
+            cell.style.animation = 'cellWinGlow 1s ease-out';
+        });
+        
+        // Create extra particles
+        this.createWinParticles();
+        
+        // Simulate victory sound with visual feedback
+        this.simulateWinSound();
+        
+        // Reset animations after they complete
+        setTimeout(() => {
+            document.body.style.animation = '';
+            document.querySelectorAll('.cell').forEach(cell => {
+                cell.style.animation = '';
+            });
+        }, 1000);
+    }
+
+    createWinParticles() {
+        const container = document.body;
+        
+        // Create 20 extra victory particles
+        for (let i = 0; i < 20; i++) {
+            const particle = document.createElement('div');
+            particle.style.position = 'fixed';
+            particle.style.width = '12px';
+            particle.style.height = '12px';
+            particle.style.borderRadius = '50%';
+            particle.style.background = `hsl(${Math.random() * 360}, 100%, 50%)`;
+            particle.style.left = Math.random() * window.innerWidth + 'px';
+            particle.style.top = window.innerHeight + 'px';
+            particle.style.pointerEvents = 'none';
+            particle.style.zIndex = '9999';
+            particle.style.animation = `victoryParticle ${2 + Math.random() * 2}s ease-out`;
+            
+            container.appendChild(particle);
+            
+            // Remove particle after animation
+            setTimeout(() => {
+                if (particle.parentNode) {
+                    particle.parentNode.removeChild(particle);
+                }
+            }, 4000);
   }
 }
 
-// Process Queued Moves
-function processMoveQueue() {
-  while (moveQueue.length > 0 && conn && conn.open) {
-    const move = moveQueue.shift();
-    conn.send(move);
-    multiplayerStatus.textContent = "Grid Linked! Engage!";
+    simulateWinSound() {
+        // Create visual sound waves
+        const soundWaves = document.createElement('div');
+        soundWaves.style.position = 'fixed';
+        soundWaves.style.top = '50%';
+        soundWaves.style.left = '50%';
+        soundWaves.style.width = '4px';
+        soundWaves.style.height = '4px';
+        soundWaves.style.border = '2px solid var(--success-neon)';
+        soundWaves.style.borderRadius = '50%';
+        soundWaves.style.transform = 'translate(-50%, -50%)';
+        soundWaves.style.animation = 'soundWave 0.8s ease-out';
+        soundWaves.style.pointerEvents = 'none';
+        soundWaves.style.zIndex = '9999';
+        
+        document.body.appendChild(soundWaves);
+        
+        setTimeout(() => {
+            if (soundWaves.parentNode) {
+                soundWaves.parentNode.removeChild(soundWaves);
   }
+        }, 800);
 }
 
-// AI Move
-function makeAIMove() {
-  if (!gameActive || isPaused) return;
-  const emptyCells = [...cells].filter((_, i) => !board[i]);
-  if (emptyCells.length > 0) {
-    let chosenCell;
-    if (aiDifficulty === "beginner") {
-      chosenCell = emptyCells[Math.floor(Math.random() * emptyCells.length)];
-    } else if (aiDifficulty === "amateur") {
-      chosenCell = getBestMove(emptyCells, "O");
-    } else if (aiDifficulty === "pro") {
-      chosenCell = getBestMove(emptyCells, "O", true);
+    // ==================== AI Logic ====================
+    
+    makeAIMove() {
+        let move;
+        
+        switch (this.difficulty) {
+            case 'easy':
+                move = this.getRandomMove();
+                break;
+            case 'medium':
+                move = this.getMediumMove();
+                break;
+            case 'hard':
+                move = this.getBestMove();
+                break;
+        }
+        
+        if (move !== -1) {
+            this.makeMove(move);
+        }
     }
-    chosenCell.click();
-  }
-}
 
-// Get Best Move
-function getBestMove(emptyCells, player, isPro = false) {
-  if (isPro) {
-    let bestMove, bestScore = -Infinity;
-    emptyCells.forEach(cell => {
-      const index = [...cells].indexOf(cell);
-      board[index] = player;
-      const score = minimax(board, 0, false);
-      board[index] = null;
+    getRandomMove() {
+        const availableMoves = this.board
+            .map((cell, index) => cell === '' ? index : null)
+            .filter(val => val !== null);
+        
+        return availableMoves.length > 0 
+            ? availableMoves[Math.floor(Math.random() * availableMoves.length)]
+            : -1;
+    }
+
+    getMediumMove() {
+        // 50% chance to play optimally, 50% random
+        return Math.random() < 0.5 ? this.getBestMove() : this.getRandomMove();
+  }
+
+    getBestMove() {
+        let bestScore = -Infinity;
+        let bestMove = -1;
+        
+        for (let i = 0; i < 9; i++) {
+            if (this.board[i] === '') {
+                this.board[i] = 'O';
+                let score = this.minimax(this.board, 0, false);
+                this.board[i] = '';
+                
       if (score > bestScore) {
         bestScore = score;
-        bestMove = cell;
+                    bestMove = i;
       }
-    });
+            }
+        }
+        
     return bestMove;
-  } else {
-    for (let combination of winningCombinations) {
-      const [a, b, c] = combination;
-      if (board[a] === "O" && board[b] === "O" && !board[c] && emptyCells.includes(cells[c])) return cells[c];
-      if (board[a] === "X" && board[b] === "X" && !board[c] && emptyCells.includes(cells[c])) return cells[c];
     }
-    return emptyCells[Math.floor(Math.random() * emptyCells.length)];
-  }
-}
 
-// Minimax Algorithm
-function minimax(board, depth, isMaximizing) {
-  if (checkWin("O")) return 10 - depth;
-  if (checkWin("X")) return depth - 10;
-  if (board.every(cell => cell)) return 0;
+    minimax(board, depth, isMaximizing) {
+        const winner = this.checkWinForBoard(board);
+        
+        if (winner === 'O') return 1;
+        if (winner === 'X') return -1;
+        if (board.every(cell => cell !== '')) return 0;
 
   if (isMaximizing) {
     let bestScore = -Infinity;
-    board.forEach((cell, i) => {
-      if (!cell) {
-        board[i] = "O";
-        const score = minimax(board, depth + 1, false);
-        board[i] = null;
+            for (let i = 0; i < 9; i++) {
+                if (board[i] === '') {
+                    board[i] = 'O';
+                    let score = this.minimax(board, depth + 1, false);
+                    board[i] = '';
         bestScore = Math.max(score, bestScore);
       }
-    });
+            }
     return bestScore;
   } else {
     let bestScore = Infinity;
-    board.forEach((cell, i) => {
-      if (!cell) {
-        board[i] = "X";
-        const score = minimax(board, depth + 1, true);
-        board[i] = null;
+            for (let i = 0; i < 9; i++) {
+                if (board[i] === '') {
+                    board[i] = 'X';
+                    let score = this.minimax(board, depth + 1, true);
+                    board[i] = '';
         bestScore = Math.min(score, bestScore);
       }
-    });
+            }
     return bestScore;
   }
 }
 
-// Check Win
-function checkWin(symbol) {
-  return winningCombinations.some(combination =>
-    combination.every(index => board[index] === symbol)
-  );
+    checkWinForBoard(board) {
+        const winPatterns = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8],
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],
+            [0, 4, 8], [2, 4, 6]
+        ];
+        
+        for (let pattern of winPatterns) {
+            const [a, b, c] = pattern;
+            if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+                return board[a];
+            }
+        }
+        return null;
 }
 
-// Check Game End
-function checkGameEnd() {
-  const currentSymbol = isOnlineMode ? playerSymbol : (isXNext ? "O" : "X"); // Last mover
-  if (checkWin(currentSymbol)) {
-    if (isOnlineMode && conn && conn.open) conn.send({ type: "gameOver", message: `${currentSymbol} Dominates!` });
-    showWin(`${currentSymbol} Dominates!`);
-    gameActive = false;
-    winSound.play();
-  } else if (board.every(cell => cell)) {
-    if (isOnlineMode && conn && conn.open) conn.send({ type: "gameOver", message: "Gridlock!" });
-    showWin("Gridlock!");
-    gameActive = false;
-    setTimeout(clearGrid, 2000);
-  }
-}
-
-// Show Win/Draw Overlay
-function showWin(message) {
-  const overlay = document.createElement("div");
-  overlay.classList.add("win-overlay");
-  const text = document.createElement("div");
-  text.classList.add("win-text");
-  text.textContent = message;
-  overlay.appendChild(text);
-  document.body.appendChild(overlay);
-  overlay.classList.add("active");
-  setTimeout(() => overlay.remove(), 2000);
-}
-
-// Clear Grid
-function clearGrid() {
-  isXNext = true;
-  gameActive = true;
-  isPaused = false;
-  pauseBtn.textContent = "Pause";
-  statusDisplay.textContent = "X Activates...";
-  board = Array(9).fill(null);
-  updateBoard();
-  if (isOnlineMode && conn && conn.open) {
-    conn.send({ type: "clear", board });
-  }
-  clickSound.play();
-}
-
-clearBtn.addEventListener("click", clearGrid);
-
-// Restart Game
-function restartGame() {
-  isXNext = true;
-  gameActive = true;
-  isPaused = false;
-  pauseBtn.textContent = "Pause";
-  statusDisplay.textContent = "X Activates...";
-  board = Array(9).fill(null);
-  updateBoard();
-  moveQueue = [];
-  if (isOnlineMode && peer) {
-    chatMessages.innerHTML = "";
-    chatContent.classList.remove("active");
-    toggleChatBtn.textContent = "Open Comm";
-    multiplayerStatus.textContent = "Resetting...";
-    generatedCodeDisplay.textContent = `Your Code: ${peer.id}`;
-    pinInput.value = "";
-    multiplayerStatus.textContent = "Share this code or enter another to connect!";
-    if (conn && conn.open) conn.send({ type: "sync", board });
-  } else {
-    multiplayerStatus.textContent = "";
-    generatedCodeDisplay.textContent = "";
-  }
-  clickSound.play();
-}
-
-// Sync Board
-function syncBoard() {
-  if (conn && conn.open && Date.now() - lastSyncTime > 500) {
-    conn.send({ type: "sync", board });
-    lastSyncTime = Date.now();
-  }
-}
-
-// Update Board
-function updateBoard() {
-  cells.forEach((cell, index) => {
-    cell.textContent = board[index] || "";
-    cell.classList.remove("X", "O");
-    if (board[index]) {
-      cell.classList.add(board[index]);
-      cell.style.color = board[index] === "X" ? colorX : colorO;
+    // ==================== Game Controls ====================
+    
+    resetGame() {
+        this.board = Array(9).fill('');
+        this.currentPlayer = 'X';
+        this.gameActive = true;
+        this.gameStartTime = Date.now();
+        this.moveCount = 0;
+        this.moveHistory = [];
+        
+        // Reset online multiplayer state
+        if (this.gameMode === 'online') {
+            this.isMyTurn = (this.mySymbol === 'X');
+            
+            // Send reset notification to opponent
+            if (this.connection) {
+                this.connection.send({
+                    type: 'reset'
+                });
+            }
+        } else {
+            this.isMyTurn = true;
+        }
+        
+        // Clear board visually
+        document.querySelectorAll('.cell').forEach(cell => {
+            cell.textContent = '';
+            cell.classList.remove('X', 'O');
+        });
+        
+        document.getElementById('currentTurn').textContent = this.currentPlayer;
+        document.getElementById('winOverlay').style.display = 'none';
+        
+        this.startGameTimer();
     }
-  });
+
+    undoMove() {
+        if (this.moveHistory.length === 0 || !this.gameActive) return;
+        
+        const lastMove = this.moveHistory.pop();
+        this.board[lastMove.index] = '';
+        this.moveCount--;
+        
+        const cell = document.querySelector(`[data-index="${lastMove.index}"]`);
+        cell.textContent = '';
+        cell.classList.remove('X', 'O');
+        
+        // Undo AI move too if in AI mode
+        if (this.gameMode === 'ai' && this.moveHistory.length > 0) {
+            const aiMove = this.moveHistory.pop();
+            this.board[aiMove.index] = '';
+            this.moveCount--;
+            
+            const aiCell = document.querySelector(`[data-index="${aiMove.index}"]`);
+            aiCell.textContent = '';
+            aiCell.classList.remove('X', 'O');
+        }
+        
+        this.currentPlayer = 'X';
+        document.getElementById('currentTurn').textContent = 'X';
+    }
+
+    // ==================== Multiplayer ====================
+    
+    createRoom() {
+        if (this.peer) {
+            this.peer.destroy();
+        }
+
+        this.roomCode = this.generateRoomCode();
+        this.peer = new Peer(this.roomCode);
+        this.isHost = true;
+        this.mySymbol = 'X'; // Host is always X
+        this.isMyTurn = true; // Host starts first
+        
+        this.peer.on('open', () => {
+            document.getElementById('roomDisplay').textContent = `Room Code: ${this.roomCode}`;
+            document.getElementById('roomDisplay').style.display = 'block';
+            document.getElementById('statusDisplay').textContent = 'Waiting for opponent...';
+            this.updateConnectionStatus(true, 'Waiting for player');
+        });
+        
+        this.peer.on('connection', (conn) => {
+            this.connection = conn;
+            this.setupConnection();
+            document.getElementById('statusDisplay').textContent = 'Player connected!';
+            this.updateConnectionStatus(true, 'Connected');
+            
+            // Send initial game state to the joining player
+            this.connection.send({
+                type: 'gameState',
+                hostSymbol: 'X',
+                guestSymbol: 'O',
+                currentPlayer: this.currentPlayer,
+                board: this.board,
+                moveCount: this.moveCount,
+                gameActive: this.gameActive
+            });
+        });
+        
+        this.peer.on('error', (err) => {
+            console.error('Peer error:', err);
+            document.getElementById('statusDisplay').textContent = 'Connection error. Try again.';
+            this.updateConnectionStatus(false, 'Error');
+        });
+    }
+
+    joinRoom() {
+        const roomCode = document.getElementById('roomCode').value.trim();
+        if (!roomCode) return;
+        
+        if (this.peer) {
+            this.peer.destroy();
+        }
+        
+        this.peer = new Peer();
+        this.isHost = false;
+        this.mySymbol = 'O'; // Guest is always O
+        this.isMyTurn = false; // Guest waits for host to start
+        
+        this.peer.on('open', () => {
+            this.connection = this.peer.connect(roomCode);
+            this.setupConnection();
+        });
+        
+        this.peer.on('error', (err) => {
+            console.error('Peer error:', err);
+            document.getElementById('statusDisplay').textContent = 'Failed to join room. Check code.';
+            this.updateConnectionStatus(false, 'Error');
+        });
+    }
+
+    setupConnection() {
+        this.connection.on('open', () => {
+            document.getElementById('statusDisplay').textContent = 'Connected to opponent!';
+            this.updateConnectionStatus(true, 'Connected');
+            this.resetGame();
+        });
+        
+        this.connection.on('data', (data) => {
+            if (data.type === 'move') {
+                // Validate the move
+                if (this.board[data.index] !== '' || !this.gameActive) return;
+                
+                this.board[data.index] = data.player;
+                this.updateCell(data.index, data.player);
+                this.moveCount = data.moveCount;
+                this.isMyTurn = true; // Now it's my turn
+                
+                if (this.checkWin()) {
+                    this.endGame(data.player);
+                } else if (this.moveCount === 9) {
+                    this.endGame('draw');
+                } else {
+                    this.switchPlayer();
+                }
+            } else if (data.type === 'gameState') {
+                // Initialize game state for joining player
+                this.mySymbol = data.guestSymbol;
+                this.currentPlayer = data.currentPlayer;
+                this.board = data.board;
+                this.moveCount = data.moveCount;
+                this.gameActive = data.gameActive;
+                this.isMyTurn = (this.currentPlayer === this.mySymbol);
+                this.updateBoard();
+            } else if (data.type === 'chat') {
+                this.addChatMessage(data.message, false);
+            } else if (data.type === 'reset') {
+                this.resetGame();
+            }
+        });
+        
+        this.connection.on('close', () => {
+            document.getElementById('statusDisplay').textContent = 'Opponent disconnected';
+            this.updateConnectionStatus(false, 'Disconnected');
+        });
+        
+        this.connection.on('error', (err) => {
+            console.error('Connection error:', err);
+            document.getElementById('statusDisplay').textContent = 'Connection lost';
+            this.updateConnectionStatus(false, 'Error');
+        });
+    }
+
+    updateBoard() {
+        // Update the visual board to match the current state
+        for (let i = 0; i < 9; i++) {
+            if (this.board[i]) {
+                this.updateCell(i, this.board[i]);
+            } else {
+                const cell = document.querySelector(`[data-index="${i}"]`);
+                cell.textContent = '';
+                cell.classList.remove('X', 'O');
+            }
+        }
+        document.getElementById('currentTurn').textContent = this.currentPlayer;
+    }
+
+    updateConnectionStatus(connected, text) {
+        const statusDot = document.getElementById('statusDot');
+        const connectionText = document.getElementById('connectionText');
+        
+        if (connected) {
+            statusDot.classList.add('connected');
+  } else {
+            statusDot.classList.remove('connected');
+        }
+        
+        connectionText.textContent = text;
+    }
+
+    generateRoomCode() {
+        return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Pause Game
-pauseBtn.addEventListener("click", () => {
-  if (!gameActive) return;
-  isPaused = !isPaused;
-  pauseBtn.textContent = isPaused ? "Resume" : "Pause";
-  statusDisplay.textContent = isPaused ? "System Paused" : `${isXNext ? "X" : "O"} Activates...`;
-  clickSound.play();
-});
-
-// Quit Game
-quitBtn.addEventListener("click", () => {
-  if (confirm("Exit the Grid?")) {
-    if (peer) peer.destroy();
-    window.close();
+    // ==================== Chat System ====================
+    
+    sendChatMessage() {
+        const input = document.getElementById('chatInput');
+        const message = input.value.trim();
+        
+        if (!message || !this.connection) return;
+        
+        this.addChatMessage(message, true);
+        this.connection.send({
+            type: 'chat',
+            message: message
+        });
+        
+        input.value = '';
   }
-});
 
-// Apply Colors
-applyColorsBtn.addEventListener("click", () => {
-  colorX = colorXInput.value;
-  colorO = colorOInput.value;
-  updateBoard();
-  clickSound.play();
-});
+    addChatMessage(message, isOwn) {
+        const chatMessages = document.getElementById('chatMessages');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `chat-message ${isOwn ? 'own' : 'other'}`;
+        messageDiv.textContent = message;
+        
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
 
-// Toggle Chat
-toggleChatBtn.addEventListener("click", () => {
-  chatContent.classList.toggle("active");
-  toggleChatBtn.textContent = chatContent.classList.contains("active") ? "Close Comm" : "Open Comm";
-  clickSound.play();
-});
+    // ==================== Statistics ====================
+    
+    loadStats() {
+        const saved = localStorage.getItem('xowars_stats');
+        return saved ? JSON.parse(saved) : { wins: 0, losses: 0, draws: 0 };
+}
 
-// Chat
-sendChatBtn.addEventListener("click", sendChatMessage);
-chatInput.addEventListener("keypress", (e) => {
-  if (e.key === "Enter") sendChatMessage();
-});
+    saveStats() {
+        localStorage.setItem('xowars_stats', JSON.stringify(this.stats));
+    }
+
+    updateStatsDisplay() {
+        document.getElementById('winsCount').textContent = this.stats.wins;
+        document.getElementById('lossesCount').textContent = this.stats.losses;
+        document.getElementById('drawsCount').textContent = this.stats.draws;
+    }
+
+    // ==================== Timer ====================
+    
+    startGameTimer() {
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+        }
+        
+        this.timerInterval = setInterval(() => {
+            if (this.gameActive) {
+                const elapsed = Math.floor((Date.now() - this.gameStartTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                document.getElementById('gameTimer').textContent = 
+                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }, 1000);
+    }
+}
+
+// ==================== Global Functions ====================
+
+function showGamePage() {
+    document.getElementById('descriptionPage').style.display = 'none';
+    document.getElementById('gamePage').style.display = 'block';
+}
+
+function showDescriptionPage() {
+    document.getElementById('descriptionPage').style.display = 'block';
+    document.getElementById('gamePage').style.display = 'none';
+}
+
+function resetGame() {
+    if (window.game) {
+        window.game.resetGame();
+    }
+}
+
+function undoMove() {
+    if (window.game) {
+        window.game.undoMove();
+    }
+}
+
+function createRoom() {
+    if (window.game) {
+        window.game.createRoom();
+    }
+}
+
+function joinRoom() {
+    if (window.game) {
+        window.game.joinRoom();
+    }
+}
 
 function sendChatMessage() {
-  const message = chatInput.value.trim();
-  if (message && isOnlineMode && conn && conn.open) {
-    const fullMessage = `${playerSymbol}: ${message}`;
-    conn.send({ type: "chat", message: fullMessage });
-    displayChatMessage(fullMessage);
-    chatInput.value = "";
-    clickSound.play();
+    if (window.game) {
+        window.game.sendChatMessage();
   }
 }
 
-function displayChatMessage(message) {
-  const msgDiv = document.createElement("div");
-  msgDiv.textContent = message;
-  chatMessages.appendChild(msgDiv);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+function playAgain() {
+    if (window.game) {
+        window.game.resetGame();
+    }
 }
 
-// Cell Events
-cells.forEach(cell => {
-  cell.addEventListener("click", drawSymbol);
-  cell.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    drawSymbol(e);
-  }, { passive: false });
-});
+// ==================== Initialize Game ====================
 
-restartBtn.addEventListener("click", restartGame);
+document.addEventListener('DOMContentLoaded', () => {
+    window.game = new SimpleXOwars();
+});

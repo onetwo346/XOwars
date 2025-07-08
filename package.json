@@ -1,12 +1,18 @@
 {
   "name": "xowars",
   "version": "1.0.0",
-  "main": "server.js",
+  "description": "Cyberpunk Tic-Tac-Toe game with multiplayer support",
+  "main": "index.html",
   "scripts": {
-    "start": "node server.js"
+    "start": "npx http-server -p 8080",
+    "dev": "npx live-server --port=8080"
   },
-  "dependencies": {
-    "express": "^4.17.1",
-    "socket.io": "^4.5.0"
-  }
+  "dependencies": {},
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "live-server": "^1.2.2"
+  },
+  "keywords": ["game", "tic-tac-toe", "multiplayer", "cyberpunk"],
+  "author": "",
+  "license": "MIT"
 }
